@@ -112,8 +112,8 @@ t1, t2, t3, t4 = st.tabs(["📝 إدخال النقاط", "📊 النتائج",
 with t1:
     st.markdown("**سلّم التنقيط** (التوزيع الافتراضي اقتراح قابل للتعديل)")
     cols = st.columns(len(crit))
-    maxes = {c["id"]: col.number_input(c["name"], 0.0, 20.0, float(sd["maxes"].get(c["id"], 0)), 0.5,
-                                       key=f"mx_{cid}_{subj}_{c['id']}")
+    maxes = {c["id"]: col.number_input(c["name"], 0.0, 20.0, float(sd["maxes"].get(c["id"], 0)), 0.25,
+                                       format="%.2f", key=f"mx_{cid}_{subj}_{c['id']}")
              for col, c in zip(cols, crit)}
     if abs(sum(maxes.values()) - 20) > 1e-9:
         st.warning(f"مجموع الدرجات القصوى = {sum(maxes.values()):g} (المطلوب 20).")
@@ -128,7 +128,8 @@ with t1:
         st.session_state[bk] = L.to_df(sd["students"], subj)
     ver = st.session_state.get(bk + "_v", 0)
     cfgs = {c["name"]: st.column_config.NumberColumn(c["name"], min_value=0.0,
-                                                    max_value=maxes[c["id"]], step=0.5) for c in crit}
+                                                    max_value=maxes[c["id"]], step=0.01,
+                                                    format="%.2f") for c in crit}
     edited = st.data_editor(st.session_state[bk], num_rows="dynamic", use_container_width=True,
                             column_config=cfgs, key=f"ed_{cid}_{subj}_{ver}")
     with st.expander("استيراد قائمة من Excel / CSV"):

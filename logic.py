@@ -116,10 +116,10 @@ def to_records(df):
 def compute(df, s):
     crit, out = CRITERIA[s], df.copy()
     mn = [c["name"] for c in crit if not c["excellence"] and not c.get("mental")]
-    out[MIN_SUM] = out[mn].sum(axis=1, min_count=1)
+    out[MIN_SUM] = out[mn].sum(axis=1, min_count=1).round(2)
     parts = ([c["name"] for c in crit if c.get("mental")] + [MIN_SUM]
              + [c["name"] for c in crit if c["excellence"]])
-    out[TOTAL] = out[parts].sum(axis=1, min_count=1)
+    out[TOTAL] = out[parts].sum(axis=1, min_count=1).round(2)
     return out
 
 
