@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
-from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC
+from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
 
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
@@ -82,7 +82,14 @@ def subject(data, s):
     d.setdefault("alert", 50)
     d.setdefault("students", [])
     d.setdefault("remedies", {})
+    d.setdefault("page", {**PAGE_DEFAULTS[s], "assessment": assess_options(s)[0]})
     return d
+
+
+def assess_options(s):
+    return [f"تقييم مكتسبات التلاميذ في {s}", "تقييم مكتسبات التلاميذ في ……………", "تقييم نهاية فترة",
+            "تقييم مكتسبات الثلاثي الأول", "تقييم مكتسبات الثلاثي الثاني",
+            "تقييم مكتسبات الثلاثي الثالث", "نص مخصص…"]
 
 
 # ---------- الجداول ----------
@@ -117,19 +124,21 @@ def compute(df, s):
 
 
 def stats(res, s, maxes, thr):
-    crit, n = CRITERIA[s], len(res)
-    mx, cnt, pct = {}, {}, {}
+    """التملك الأقصى/الأدنى = أعلى/أقل نقطة فعلية نالها تلميذ في العمود،
+    والنسبة = (عدد من نالوا عتبة التملك فأكثر) ÷ (عدد التلاميذ المنقَّطين)"""
+    crit = CRITERIA[s]
+    top, low, pct = {}, {}, {}
 
     def add(col, m):
-        ok = int((res[col] >= thr * m).sum()) if m else 0
-        mx[col], cnt[col], pct[col] = m, ok, round(100 * ok / n, 1) if n else 0.0
+        v = res[col].dropna()
+        top[col], low[col] = (v.max(), v.min()) if len(v) else (None, None)
+        pct[col] = round(100 * (v >= thr * m).sum() / len(v), 1) if len(v) and m else 0.0
 
     for c in crit:
         add(c["name"], maxes[c["id"]])
     add(MIN_SUM, sum(maxes[c["id"]] for c in crit if not c["excellence"] and not c.get("mental")))
     add(TOTAL, sum(maxes.values()))
-    return pd.DataFrame({"التملك الأقصى بالمعيار": mx, "عدد الذين حققوا التملك الأدنى": cnt,
-                         "النسبة المئوية (%)": pct}).T
+    return pd.DataFrame({"التملك الأقصى": top, "التملك الأدنى": low, "النسبة المئوية (%)": pct}).T
 
 
 def analyse(s, sd):

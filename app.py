@@ -164,8 +164,8 @@ with t2:
         st.dataframe(show, use_container_width=True, hide_index=True)
         st.markdown("**الصفوف الإحصائية**")
         st.dataframe(st_df, use_container_width=True)
-        st.caption("التملك = الحصول على العتبة أو أكثر من أقصى درجة المعيار (الخانة الفارغة تُحسب غير متملكة) · "
-                   "النسبة = عدد المتملكين ÷ عدد التلاميذ × 100")
+        st.caption("التملك الأقصى/الأدنى = أعلى/أقل نقطة نالها تلميذ في العمود · النسبة المئوية = عدد التلاميذ الذين "
+                   "نالوا نصف الدرجة (العتبة) فأكثر ÷ عدد التلاميذ المنقَّطين × 100 (الخانات الفارغة لا تُحتسب)")
 
 # ---------- 3) التشخيص والعلاج ----------
 def _save_rem(name, key, nkey):
@@ -190,9 +190,13 @@ with t3:
         st.info("أضف تلاميذ لعرض التشخيص.")
     else:
         res, st_df = an
+        plan = pd.DataFrame([{"المعيار": c["name"], "التملك %": st_df.loc["النسبة المئوية (%)", c["name"]],
+                              "التلاميذ المعنيون بالخطة العلاجية": "، ".join(L.weak(res, c, sd)) or "—",
+                              "الجهاز العلاجي": " | ".join(L.remedies(sd, subj, c["name"])) or "—"}
+                             for c in crit])
+        st.markdown("**الخطة العلاجية** — التلاميذ الذين نالوا أقل من نصف درجة المعيار يُدرجون تلقائياً")
+        st.dataframe(plan, use_container_width=True, hide_index=True)
         for c in crit:
-            if c.get("mental"):
-                continue
             nm = c["name"]
             p = st_df.loc["النسبة المئوية (%)", nm]
             ws = L.weak(res, c, sd)
@@ -218,6 +222,25 @@ with t3:
                 x.button("💾 حفظ", key=f"sv_{key}", on_click=_save_rem, args=(nm, key, nkey))
                 y.button("↩️ الافتراضي", key=f"rs_{key}", on_click=_reset_rem, args=(nm, key))
 
+    st.divider()
+    st.markdown("### 📑 صفحة الكفايات والأداء المنتظر")
+    pg, k = sd["page"], f"{cid}_{subj}"
+    a, b = st.columns(2)
+    dom = a.text_input("كفاية المجال", pg["domain"], key=f"pgd_{k}")
+    sub_c = b.text_input("كفاية المادة", pg["subject"], key=f"pgs_{k}")
+    opts = L.assess_options(subj)
+    cur = pg["assessment"]
+    ch = st.selectbox("نوع التقييم", opts, index=opts.index(cur) if cur in opts else len(opts) - 1,
+                      key=f"pga_{k}")
+    assess = st.text_input("نص نوع التقييم", cur if cur not in opts else "", key=f"pgc_{k}") \
+        if ch == opts[-1] else ch
+    perf = st.text_area("الأداء المنتظر (اتركه فارغاً لطباعة أسطر منقطة تُملأ يدوياً)", pg["performance"],
+                        height=110, key=f"pgp_{k}")
+    newpg = {"domain": dom, "subject": sub_c, "assessment": assess, "performance": perf}
+    if newpg != pg:
+        sd["page"] = newpg
+        L.save(cid, data)
+
 # ---------- 4) التصدير والنسخ ----------
 with t4:
     items = []
@@ -229,13 +252,11 @@ with t4:
         res_s, st_s = r
         diag = []
         for c in CRITERIA[s]:
-            if c.get("mental"):
-                continue
             d = DIAGNOSTIC[s].get(c["name"], {"errors": [], "causes": []})
             diag.append({"name": c["name"], "pct": st_s.loc["النسبة المئوية (%)", c["name"]],
                          "weak": L.weak(res_s, c, sx), "errors": d["errors"], "causes": d["causes"],
                          "remedies": L.remedies(sx, s, c["name"])})
-        items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag})
+        items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag, "page": sx["page"]})
     if items:
         meta = {**cfg, "class_name": cls["name"], "level": L.YEARS[cls["year"]], "degree": cls["degree"]}
         st.download_button("📄 تصدير تقرير القسم إلى Word (docx)", build_docx(meta, items),
