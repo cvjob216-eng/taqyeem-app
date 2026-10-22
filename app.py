@@ -10,9 +10,21 @@ import streamlit as st
 
 import logic as L
 from data import CRITERIA, DIAGNOSTIC, INDICATORS
-from report import build_docx
+import report as _report
 
 st.set_page_config(page_title="دفتر التقييم والمتابعة", page_icon="📒", layout="wide")
+# ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
+import importlib
+
+NEED = 3
+for _m in (L, _report):
+    if getattr(_m, "VERSION", 0) < NEED:
+        importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
+if getattr(L, "VERSION", 0) < NEED or getattr(_report, "VERSION", 0) < NEED:
+    st.error("ملفا logic.py و/أو report.py على الخادم أقدم من app.py. ارفع النسخ الجديدة إلى GitHub "
+             "(في نفس مجلد app.py) ثم Manage app ← Reboot app.")
+    st.stop()
+
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
 html, body, .stApp {font-family:'Cairo',sans-serif}
@@ -260,7 +272,7 @@ with t4:
         items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag, "page": sx["page"]})
     if items:
         meta = {**cfg, "class_name": cls["name"], "level": L.YEARS[cls["year"]], "degree": cls["degree"]}
-        st.download_button("📄 تصدير تقرير القسم إلى Word (docx)", build_docx(meta, items),
+        st.download_button("📄 تصدير تقرير القسم إلى Word (docx)", _report.build_docx(meta, items),
                            f"taqyeem_{cls['name']}.docx",
                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                            type="primary")

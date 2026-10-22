@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
 
+VERSION = 3  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
