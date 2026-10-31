@@ -17,7 +17,7 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 # ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
 import importlib
 
-NEED = 4
+NEED = 5
 for _m in (L, _report):
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
@@ -63,9 +63,14 @@ with st.expander("🏢 بيانات المؤسسة"):
 # ---------- الأقسام ----------
 def _add():
     nm, yr = st.session_state.new_nm.strip(), st.session_state.new_yr
-    if nm:
+    if nm and yr is not None:
         st.session_state.cid = L.add_class(nm, yr, st.session_state[f"new_dg_{yr}"])
-        st.session_state.new_nm = ""
+        st.session_state.new_nm, st.session_state.new_yr = "", None
+
+
+def _level_changed(cid):
+    """عند تغيير مستوى قسم تُقترح درجته المناسبة (ويمكنك تعديلها بعدها)"""
+    st.session_state[f"ed_{cid}"] = L.default_degree(st.session_state[f"ey_{cid}"])
 
 
 def _delete(cid):
@@ -86,11 +91,12 @@ with st.expander("➕ إدارة الأقسام", expanded=not classes):
     st.markdown("**إضافة قسم جديد**")
     a, b, c, d = st.columns([3, 2, 2, 1])
     a.text_input("اسم القسم", placeholder="مثال: السادسة أ", key="new_nm")
-    yr = b.selectbox("المستوى", list(L.YEARS), index=3, format_func=L.YEARS.get, key="new_yr")
-    c.selectbox("الدرجة التي ينتمي إليها", L.DEGREES, index=L.DEGREES.index(L.default_degree(yr)),
-                key=f"new_dg_{yr}")
+    yr = b.selectbox("المستوى", list(L.YEARS), index=None, placeholder="اختر المستوى", format_func=L.YEARS.get,
+                     key="new_yr")
+    c.selectbox("الدرجة التي ينتمي إليها", L.DEGREES, index=L.DEGREES.index(L.default_degree(yr or 6)),
+                key=f"new_dg_{yr}", disabled=yr is None)
     d.markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
-    d.button("إضافة", on_click=_add, type="primary")
+    d.button("إضافة", on_click=_add, type="primary", disabled=yr is None)
     if classes:
         cur = next(c for c in classes if c["id"] == st.session_state.cid)
         st.divider()
@@ -98,7 +104,8 @@ with st.expander("➕ إدارة الأقسام", expanded=not classes):
         a, b, c, d = st.columns([3, 2, 2, 2])
         nn = a.text_input("الاسم", cur["name"], key=f"en_{cur['id']}")
         ny = b.selectbox("المستوى", list(L.YEARS), index=list(L.YEARS).index(cur["year"]),
-                         format_func=L.YEARS.get, key=f"ey_{cur['id']}")
+                         format_func=L.YEARS.get, key=f"ey_{cur['id']}",
+                         on_change=_level_changed, args=(cur["id"],))
         nd = c.selectbox("الدرجة", L.DEGREES, index=L.DEGREES.index(cur["degree"]), key=f"ed_{cur['id']}")
         if (nn.strip(), ny, nd) != (cur["name"], cur["year"], cur["degree"]) and nn.strip():
             L.update_class(cur["id"], name=nn.strip(), year=ny, degree=nd)
@@ -238,7 +245,7 @@ with t3:
 
     st.divider()
     st.markdown("### 📑 صفحة الكفايات والأداء المنتظر")
-    pg, k = sd["page"], f"{cid}_{subj}"
+    pg, k = sd["page"], f"{cid}_{subj}_{cls['year']}"
     a, b = st.columns(2)
     dom = a.text_input("كفاية المجال", pg["domain"], key=f"pgd_{k}")
     sub_c = b.text_input("كفاية المادة", pg["subject"], key=f"pgs_{k}")
@@ -255,7 +262,7 @@ with t3:
     else:
         labels = [e["label"] for e in cat]
         chosen = st.multiselect("اختر الفترات / الوحدات المستهدفة (تُنظَّم تلقائياً في الملف النهائي)", labels,
-                                default=[x for x in labels if x in pf["sel"]], key=f"pfc_{k}")
+                                default=[x for x in labels if L.perf_key(cls["year"], x) in pf["sel"]], key=f"pfc_{k}")
         n_sel, n_rem, n_cus = {}, dict(pf["rem"]), {}
         for e in cat:
             lab = e["label"]
@@ -265,19 +272,21 @@ with t3:
                 st.markdown(f"**{e['intro']}**")
                 if e["items"]:
                     texts = [x for x, _ in e["items"]]
-                    saved = [x for x in pf["sel"].get(lab, []) if x in texts] if lab in pf["sel"] else None
+                    sk = L.perf_key(cls["year"], lab)
+                    saved = [x for x in pf["sel"].get(sk, []) if x in texts] if sk in pf["sel"] else None
                     picked = st.multiselect("المكوّنات المعتمدة (الصياغات البديلة غير مفعّلة افتراضياً)", texts,
                                             default=saved if saved is not None else [x for x, a in e["items"] if not a],
                                             key=f"pfb_{k}_{zlib.crc32(lab.encode())}")
                 else:
                     picked = [e["intro"]]
-                n_sel[lab] = picked
+                sk = L.perf_key(cls["year"], lab)
+                n_sel[sk] = picked
                 for x in picked:
                     cur = n_rem.get(x, L.default_rem(subj, x))
                     n_rem[x] = st.multiselect("الحلول العلاجية المقترحة: " + (x if len(x) < 60 else x[:57] + "…"),
                                               list(dict.fromkeys(L.suggest(subj, x) + cur)), default=cur,
                                               key=f"pfr_{k}_{zlib.crc32(x.encode())}")
-                n_cus[lab] = st.text_area("حلول علاجية مخصصة (سطر لكل حل)", pf["custom"].get(lab, ""), height=70,
+                n_cus[sk] = st.text_area("حلول علاجية مخصصة (سطر لكل حل)", pf["custom"].get(sk, ""), height=70,
                                           key=f"pfx_{k}_{zlib.crc32(lab.encode())}")
         newpf = {"sel": n_sel, "rem": n_rem, "custom": n_cus}
         if newpf != pf:

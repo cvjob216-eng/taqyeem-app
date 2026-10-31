@@ -12,7 +12,7 @@ import pandas as pd
 from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
 from performance import PERFORMANCE, default_rem, suggest  # noqa: F401
 
-VERSION = 4  # يُقارَن بما يتوقعه app.py
+VERSION = 5  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
@@ -99,16 +99,22 @@ def catalog(year, s):
     return PERFORMANCE.get(year, {}).get(s, [])
 
 
+def perf_key(year, label):
+    """مفتاح حفظ الاختيار: المستوى + الفترة (لأن «الفترة الأولى» تتكرر بين المستويات)"""
+    return f"{year}|{label}"
+
+
 def perf_plan(year, s, sd):
-    """الأداء المنتظر المختار منظّماً مع الحلول العلاجية لكل مكوّن (للتقرير)"""
+    """الأداء المنتظر المختار منظّماً مع الحلول العلاجية لكل مكوّن (للتقرير) — لمستوى القسم فقط"""
     pf, out = sd["perf"], []
     for e in catalog(year, s):
-        lab = e["label"]
-        if lab not in pf["sel"]:
+        key = perf_key(year, e["label"])
+        if key not in pf["sel"]:
             continue
-        parts = [{"text": t, "remedies": pf["rem"].get(t, default_rem(s, t))} for t in pf["sel"][lab]]
-        custom = [x.strip() for x in pf["custom"].get(lab, "").splitlines() if x.strip()]
-        out.append({"label": lab, "intro": e["intro"] if e["items"] else "", "parts": parts, "custom": custom})
+        valid = [t for t, _ in e["items"]] or [e["intro"]]
+        parts = [{"text": t, "remedies": pf["rem"].get(t, default_rem(s, t))} for t in pf["sel"][key] if t in valid]
+        custom = [x.strip() for x in pf["custom"].get(key, "").splitlines() if x.strip()]
+        out.append({"label": e["label"], "intro": e["intro"] if e["items"] else "", "parts": parts, "custom": custom})
     return out
 
 
