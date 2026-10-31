@@ -9,7 +9,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm
 
-VERSION = 3
+VERSION = 4
 FONT = "Arial"
 
 
@@ -71,8 +71,8 @@ def _dotted(doc):
     p.add_run(" ")
 
 
-def _page(doc, subject, pg):
-    """صفحة «الكفايات والأداء المنتظر»"""
+def _page(doc, subject, pg, plan):
+    """صفحة «الكفايات والأداء المنتظر» + الخطة العلاجية حسب الأداء المنتظر"""
     doc.add_page_break()
     _par(doc, "الكفايات والأداء المنتظر.", 16, True, color="2F5597")
     _par(doc, "")
@@ -82,11 +82,29 @@ def _page(doc, subject, pg):
     _par(doc, "")
     _par(doc, "الأداء المنتظر:", 13, True)
     lines = [ln for ln in pg["performance"].splitlines() if ln.strip()]
+    for e in plan:
+        _par(doc, e["label"], 12, True)
+        if e["intro"]:
+            _par(doc, e["intro"], 11)
+        for p in e["parts"]:
+            _par(doc, f"• {p['text']}", 11)
     for ln in lines:
         _par(doc, ln, 12)
-    if not lines:
+    if not plan and not lines:
         for _ in range(6):
             _dotted(doc)
+    if plan:
+        _par(doc, "")
+        _par(doc, "الخطة العلاجية حسب الأداء المنتظر", 13, True)
+        rows = []
+        for e in plan:
+            first = True
+            for p in e["parts"]:
+                rows.append([(e["label"],) if first else "", p["text"], p["remedies"] or "—"])
+                first = False
+            if e["custom"]:
+                rows.append([(e["label"],) if first else "", "حلول مخصصة", e["custom"]])
+        _table(doc, ["الفترة / الوحدة", "الأداء المنتظر المستهدف", "الحلول العلاجية المقترحة"], rows, size=10)
 
 
 def build_docx(meta, items):
@@ -120,7 +138,7 @@ def build_docx(meta, items):
                      "تأويل الخطأ والأسباب", "الجهاز العلاجي"],
                [[d["name"], d["pct"], (d["weak"] or "—"), d["errors"], d["causes"], d["remedies"]]
                 for d in it["diag"]])
-        _page(doc, it["subject"], it["page"])
+        _page(doc, it["subject"], it["page"], it.get("plan", []))
 
     buf = io.BytesIO()
     doc.save(buf)

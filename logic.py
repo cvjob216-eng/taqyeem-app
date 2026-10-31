@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pandas as pd
 from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
+from performance import PERFORMANCE, default_rem, suggest  # noqa: F401
 
-VERSION = 3  # يُقارَن بما يتوقعه app.py
+VERSION = 4  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
@@ -83,8 +84,32 @@ def subject(data, s):
     d.setdefault("alert", 50)
     d.setdefault("students", [])
     d.setdefault("remedies", {})
-    d.setdefault("page", {**PAGE_DEFAULTS[s], "assessment": assess_options(s)[0]})
+    d.setdefault("page", {**PAGE_DEFAULTS[s], "performance": "", "assessment": assess_options(s)[0]})
+    if d["page"].get("performance") in _OLD_PERF:  # نص افتراضي قديم حلّت محلّه القوائم الجاهزة
+        d["page"]["performance"] = ""
+    d.setdefault("perf", {"sel": {}, "rem": {}, "custom": {}})
     return d
+
+
+_OLD_PERF = tuple(v["performance"] for v in PAGE_DEFAULTS.values())
+
+
+def catalog(year, s):
+    """قائمة الأداء المنتظر الجاهزة لمستوى ومادة (فارغة للمستويات غير المتوفرة)"""
+    return PERFORMANCE.get(year, {}).get(s, [])
+
+
+def perf_plan(year, s, sd):
+    """الأداء المنتظر المختار منظّماً مع الحلول العلاجية لكل مكوّن (للتقرير)"""
+    pf, out = sd["perf"], []
+    for e in catalog(year, s):
+        lab = e["label"]
+        if lab not in pf["sel"]:
+            continue
+        parts = [{"text": t, "remedies": pf["rem"].get(t, default_rem(s, t))} for t in pf["sel"][lab]]
+        custom = [x.strip() for x in pf["custom"].get(lab, "").splitlines() if x.strip()]
+        out.append({"label": lab, "intro": e["intro"] if e["items"] else "", "parts": parts, "custom": custom})
+    return out
 
 
 def assess_options(s):

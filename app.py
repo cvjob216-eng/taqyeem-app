@@ -4,6 +4,7 @@
 """
 import io
 import os
+import zlib
 
 import pandas as pd
 import streamlit as st
@@ -16,7 +17,7 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 # ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
 import importlib
 
-NEED = 3
+NEED = 4
 for _m in (L, _report):
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
@@ -247,8 +248,43 @@ with t3:
                       key=f"pga_{k}")
     assess = st.text_input("نص نوع التقييم", cur if cur not in opts else "", key=f"pgc_{k}") \
         if ch == opts[-1] else ch
-    perf = st.text_area("الأداء المنتظر (اتركه فارغاً لطباعة أسطر منقطة تُملأ يدوياً)", pg["performance"],
-                        height=110, key=f"pgp_{k}")
+    st.markdown("#### 🎯 الأداء المنتظر المستهدف في هذا التقييم")
+    cat, pf = L.catalog(cls["year"], subj), sd["perf"]
+    if not cat:
+        st.info("لا توجد قائمة جاهزة لهذا المستوى (القوائم متوفرة للسنوات 4 و5 و6)، استعمل الخانة الحرة أدناه.")
+    else:
+        labels = [e["label"] for e in cat]
+        chosen = st.multiselect("اختر الفترات / الوحدات المستهدفة (تُنظَّم تلقائياً في الملف النهائي)", labels,
+                                default=[x for x in labels if x in pf["sel"]], key=f"pfc_{k}")
+        n_sel, n_rem, n_cus = {}, dict(pf["rem"]), {}
+        for e in cat:
+            lab = e["label"]
+            if lab not in chosen:
+                continue
+            with st.expander(lab, expanded=True):
+                st.markdown(f"**{e['intro']}**")
+                if e["items"]:
+                    texts = [x for x, _ in e["items"]]
+                    saved = [x for x in pf["sel"].get(lab, []) if x in texts] if lab in pf["sel"] else None
+                    picked = st.multiselect("المكوّنات المعتمدة (الصياغات البديلة غير مفعّلة افتراضياً)", texts,
+                                            default=saved if saved is not None else [x for x, a in e["items"] if not a],
+                                            key=f"pfb_{k}_{zlib.crc32(lab.encode())}")
+                else:
+                    picked = [e["intro"]]
+                n_sel[lab] = picked
+                for x in picked:
+                    cur = n_rem.get(x, L.default_rem(subj, x))
+                    n_rem[x] = st.multiselect("الحلول العلاجية المقترحة: " + (x if len(x) < 60 else x[:57] + "…"),
+                                              list(dict.fromkeys(L.suggest(subj, x) + cur)), default=cur,
+                                              key=f"pfr_{k}_{zlib.crc32(x.encode())}")
+                n_cus[lab] = st.text_area("حلول علاجية مخصصة (سطر لكل حل)", pf["custom"].get(lab, ""), height=70,
+                                          key=f"pfx_{k}_{zlib.crc32(lab.encode())}")
+        newpf = {"sel": n_sel, "rem": n_rem, "custom": n_cus}
+        if newpf != pf:
+            sd["perf"] = newpf
+            L.save(cid, data)
+    perf = st.text_area("ملاحظات / أداء منتظر إضافي بنص حر (اتركه فارغاً مع عدم اختيار شيء لطباعة أسطر منقطة)",
+                        pg["performance"], height=90, key=f"pgp_{k}")
     newpg = {"domain": dom, "subject": sub_c, "assessment": assess, "performance": perf}
     if newpg != pg:
         sd["page"] = newpg
@@ -269,7 +305,8 @@ with t4:
             diag.append({"name": c["name"], "pct": st_s.loc["النسبة المئوية (%)", c["name"]],
                          "weak": L.weak(res_s, c, sx), "errors": d["errors"], "causes": d["causes"],
                          "remedies": L.remedies(sx, s, c["name"])})
-        items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag, "page": sx["page"]})
+        items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag, "page": sx["page"],
+                      "plan": L.perf_plan(cls["year"], s, sx)})
     if items:
         meta = {**cfg, "class_name": cls["name"], "level": L.YEARS[cls["year"]], "degree": cls["degree"]}
         st.download_button("📄 تصدير تقرير القسم إلى Word (docx)", _report.build_docx(meta, items),
