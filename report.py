@@ -9,7 +9,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm
 
-VERSION = 5
+VERSION = 6
 FONT = "Arial"
 
 

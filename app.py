@@ -3,6 +3,7 @@
 تشغيل:  pip install -r requirements.txt  ثم  streamlit run app.py
 """
 import io
+import numbers
 import os
 import zlib
 
@@ -17,7 +18,7 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 # ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
 import importlib
 
-NEED = 5
+NEED = 6
 for _m in (L, _report):
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
@@ -126,7 +127,63 @@ crit = CRITERIA[subj]
 st.caption(f"{cfg['school']} — المربي: {cfg['teacher']} — {cfg['year']} — "
            f"{cls['name']} ({L.YEARS[cls['year']]}، {cls['degree']})")
 
-t1, t2, t3, t4 = st.tabs(["📝 إدخال النقاط", "📊 النتائج", "🩺 التشخيص والعلاج", "📄 التصدير والنسخ"])
+t0, t1, t2, t3, t4 = st.tabs(["👥 قائمة التلاميذ", "📝 إدخال النقاط", "📊 النتائج", "🩺 التشخيص والعلاج", "📄 التصدير والنسخ"])
+
+# ---------- 0) قائمة التلاميذ (تُدخل مرة واحدة للسنة) ----------
+def _roster_reset(rk, names):
+    st.session_state[rk] = pd.DataFrame({L.NAME: names})
+    st.session_state[rk + "_p"] = dict(enumerate(names))
+    st.session_state[rk + "_v"] = st.session_state.get(rk + "_v", 0) + 1
+
+
+with t0:
+    rk = f"rost_{cid}"
+    if rk not in st.session_state:
+        st.session_state[rk] = pd.DataFrame({L.NAME: data["roster"]})
+        st.session_state[rk + "_p"] = dict(enumerate(data["roster"]))
+    rver = st.session_state.get(rk + "_v", 0)
+    st.markdown(f"**قائمة تلاميذ {cls['name']}** — تُدخل مرة واحدة وتظهر تلقائياً في كل المواد والتقييمات.")
+    ed = st.data_editor(st.session_state[rk], num_rows="dynamic", use_container_width=True,
+                        key=f"rosted_{cid}_{rver}")
+    prev, cur, new_roster, renames, dups = st.session_state[rk + "_p"], {}, [], {}, []
+    for idx, val in ed[L.NAME].items():
+        name = "" if pd.isna(val) else str(val).strip()
+        cur[idx] = name
+        if not name:
+            continue
+        if name in new_roster:
+            dups.append(name)
+            continue
+        old = prev.get(idx) if isinstance(idx, numbers.Integral) else None
+        if old and old != name:
+            renames[old] = name
+        new_roster.append(name)
+    st.session_state[rk + "_p"] = cur
+    if dups:
+        st.warning("أسماء مكررة تم تجاهلها: " + "، ".join(dups))
+    if new_roster != data["roster"]:
+        L.set_roster(data, new_roster, renames)
+        L.refresh(data, sd)
+        L.save(cid, data)
+    st.caption(f"عدد التلاميذ: {len(data['roster'])} · ✅ يُحفظ تلقائياً · تصحيح اسم يحافظ على نقاطه")
+    with st.expander("➕ لصق قائمة أسماء أو استيراد من ملف"):
+        txt = st.text_area("الصق الأسماء (اسم في كل سطر)", height=140, key=f"paste_{cid}_{rver}")
+        up = st.file_uploader("أو ملف Excel / CSV (عمود «الاسم واللقب» أو العمود الأول)", type=["xlsx", "csv"],
+                              key=f"upr_{cid}_{rver}")
+        mode = st.radio("الطريقة", ["إضافة إلى القائمة الحالية", "استبدال القائمة"], horizontal=True,
+                        key=f"mode_{cid}")
+        if st.button("تطبيق", key=f"apply_{cid}"):
+            names = [x.strip() for x in txt.splitlines() if x.strip()]
+            if up is not None:
+                src = (pd.read_csv(up, encoding="utf-8-sig") if up.name.endswith(".csv")
+                       else pd.read_excel(up))
+                col = L.NAME if L.NAME in src else src.columns[0]
+                names += [str(x).strip() for x in src[col].dropna() if str(x).strip()]
+            merged = list(dict.fromkeys(([] if mode == "استبدال القائمة" else data["roster"]) + names))
+            L.set_roster(data, merged)
+            L.save(cid, data)
+            _roster_reset(rk, merged)
+            st.rerun()
 
 # ---------- 1) الإدخال ----------
 with t1:
@@ -143,32 +200,31 @@ with t1:
     alert = b.slider("نسبة التملك الدنيا قبل التنبيه للمعالجة (%)", 10, 100, int(sd["alert"]), 5,
                      key=f"al_{cid}_{subj}")
 
-    bk = f"base_{cid}_{subj}"
-    if bk not in st.session_state:
-        st.session_state[bk] = L.to_df(sd["students"], subj)
-    ver = st.session_state.get(bk + "_v", 0)
-    cfgs = {c["name"]: st.column_config.NumberColumn(c["name"], min_value=0.0,
-                                                    max_value=maxes[c["id"]], step=0.01,
-                                                    format="%.2f") for c in crit}
-    edited = st.data_editor(st.session_state[bk], num_rows="dynamic", use_container_width=True,
-                            column_config=cfgs, key=f"ed_{cid}_{subj}_{ver}")
-    with st.expander("استيراد قائمة من Excel / CSV"):
-        up = st.file_uploader("عمود «الاسم واللقب» + أعمدة المعايير", type=["xlsx", "csv"],
-                              key=f"up_{cid}_{subj}_{ver}")
-        if up is not None and st.button("استيراد (يعوّض الجدول الحالي)"):
-            src = pd.read_csv(up) if up.name.endswith(".csv") else pd.read_excel(up)
-            st.session_state[bk] = L.to_df(src.to_dict("records"), subj)
-            st.session_state[bk + "_v"] = ver + 1
-            st.rerun()
-
-    df = L.clean(edited, subj)
-    bad = [(r[L.NAME], c["name"]) for _, r in df.iterrows() for c in crit
-           if pd.notna(r[c["name"]]) and not 0 <= r[c["name"]] <= maxes[c["id"]]]
-    if bad:
-        st.error("نقاط خارج المجال المسموح: " + "، ".join(f"{a} ({b})" for a, b in bad))
-    new = {"maxes": maxes, "threshold": thr, "alert": alert, "students": L.to_records(df)}
+    roster = data["roster"]
+    new = {"maxes": maxes, "threshold": thr, "alert": alert}
+    if not roster:
+        st.info("👥 أدخل قائمة تلاميذ القسم أولاً من تبويب «قائمة التلاميذ» — مرة واحدة فقط للسنة كاملة.")
+    else:
+        rv = zlib.crc32("\n".join(roster).encode())
+        bk = f"base_{cid}_{subj}_{rv}"
+        if bk not in st.session_state:
+            st.session_state[bk] = L.to_df(sd["students"], subj, blank=False)
+        cfgs = {c["name"]: st.column_config.NumberColumn(c["name"], min_value=0.0, max_value=maxes[c["id"]],
+                                                        step=0.01, format="%.2f") for c in crit}
+        edited = st.data_editor(st.session_state[bk], use_container_width=True, hide_index=True,
+                                disabled=[L.NAME], column_config=cfgs, key=f"ed_{cid}_{subj}_{rv}")
+        df = L.to_df(edited.to_dict("records"), subj, blank=False)
+        bad = [(r[L.NAME], c["name"]) for _, r in df.iterrows() for c in crit
+               if pd.notna(r[c["name"]]) and not 0 <= r[c["name"]] <= maxes[c["id"]]]
+        if bad:
+            st.error("نقاط خارج المجال المسموح: " + "، ".join(f"{a} ({b})" for a, b in bad))
+        sc = dict(sd["scores"])
+        for _, r in df.iterrows():
+            sc[r[L.NAME]] = {c["name"]: (None if pd.isna(r[c["name"]]) else float(r[c["name"]])) for c in crit}
+        new["scores"] = sc
     if any(sd[k] != v for k, v in new.items()):
         sd.update(new)
+        L.refresh(data, sd)
         L.save(cid, data)
         st.caption("✅ تم الحفظ تلقائياً في بيانات هذا القسم")
 
@@ -340,7 +396,7 @@ with t4:
     if bz is not None and st.button("استرجاع"):
         try:
             n = L.restore_zip(bz.getvalue())
-            for k in [k for k in st.session_state if k.startswith(("base_", "rm_"))]:
+            for k in [k for k in st.session_state if k.startswith(("base_", "rm_", "rost_"))]:
                 del st.session_state[k]
             st.success(f"تم استرجاع {n} ملفات. أعد تحميل الصفحة.")
         except Exception as e:

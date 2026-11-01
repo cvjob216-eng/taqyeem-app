@@ -12,7 +12,7 @@ import pandas as pd
 from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
 from performance import PERFORMANCE, default_rem, suggest  # noqa: F401
 
-VERSION = 5  # يُقارَن بما يتوقعه app.py
+VERSION = 6  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
@@ -69,11 +69,44 @@ def delete_class(cid):
 
 
 def load(cid):
-    return _read(CLS_DIR / f"{cid}.json", {})
+    data = _read(CLS_DIR / f"{cid}.json", {})
+    if "roster" not in data:  # ترحيل بيانات النسخ القديمة (تلاميذ مفصولون لكل مادة) إلى قائمة موحّدة
+        roster = []
+        for s in CRITERIA:
+            sd = data.get(s)
+            if not isinstance(sd, dict):
+                continue
+            scores = {}
+            for r in sd.pop("students", []):
+                n = str(r.get(NAME, "")).strip()
+                if n:
+                    if n not in roster:
+                        roster.append(n)
+                    scores[n] = {k: v for k, v in r.items() if k != NAME}
+            sd["scores"] = scores
+        data["roster"] = roster
+    return data
 
 
 def save(cid, data):
-    _write(CLS_DIR / f"{cid}.json", data)
+    out = {k: ({a: b for a, b in v.items() if a != "students"} if isinstance(v, dict) else v)
+           for k, v in data.items()}  # «students» مشتقّة من القائمة والنقاط ولا تُخزَّن
+    _write(CLS_DIR / f"{cid}.json", out)
+
+
+def refresh(data, sd):
+    """سجلات التلاميذ = قائمة القسم (مرة واحدة) + نقاط هذه المادة"""
+    sd["students"] = [{NAME: n, **sd["scores"].get(n, {})} for n in data["roster"]]
+
+
+def set_roster(data, roster, renames=None):
+    """تعيين قائمة القسم؛ عند تصحيح اسم تُنقل نقاطه في كل المواد"""
+    for old, new in (renames or {}).items():
+        for s in CRITERIA:
+            sc = data.get(s, {}).get("scores", {})
+            if old in sc and new not in sc:
+                sc[new] = sc.pop(old)
+    data["roster"] = roster
 
 
 def subject(data, s):
@@ -82,7 +115,9 @@ def subject(data, s):
     d.setdefault("maxes", {k: float(v) for k, v in DEFAULT_MAX[s].items()})
     d.setdefault("threshold", 0.5)
     d.setdefault("alert", 50)
-    d.setdefault("students", [])
+    d.setdefault("scores", {})
+    data.setdefault("roster", [])
+    refresh(data, d)
     d.setdefault("remedies", {})
     d.setdefault("page", {**PAGE_DEFAULTS[s], "performance": "", "assessment": assess_options(s)[0]})
     if d["page"].get("performance") in _OLD_PERF:  # نص افتراضي قديم حلّت محلّه القوائم الجاهزة
