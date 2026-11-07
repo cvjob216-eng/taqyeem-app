@@ -191,21 +191,19 @@ def compute(df, s):
 
 
 def stats(res, s, maxes, thr):
-    """التملك الأقصى/الأدنى = أعلى/أقل نقطة فعلية نالها تلميذ في العمود،
-    والنسبة = (عدد من نالوا عتبة التملك فأكثر) ÷ (عدد التلاميذ المنقَّطين)"""
-    crit = CRITERIA[s]
-    top, low, pct = {}, {}, {}
+    crit, n = CRITERIA[s], len(res)
+    mx, cnt, pct = {}, {}, {}
 
     def add(col, m):
-        v = res[col].dropna()
-        top[col], low[col] = (v.max(), v.min()) if len(v) else (None, None)
-        pct[col] = round(100 * (v >= thr * m).sum() / len(v), 1) if len(v) and m else 0.0
+        ok = int((res[col] >= thr * m).sum()) if m else 0
+        mx[col], cnt[col], pct[col] = m, ok, round(100 * ok / n, 1) if n else 0.0
 
     for c in crit:
         add(c["name"], maxes[c["id"]])
     add(MIN_SUM, sum(maxes[c["id"]] for c in crit if not c["excellence"] and not c.get("mental")))
     add(TOTAL, sum(maxes.values()))
-    return pd.DataFrame({"التملك الأقصى": top, "التملك الأدنى": low, "النسبة المئوية (%)": pct}).T
+    return pd.DataFrame({"التملك الأقصى بالمعيار": mx, "عدد الذين حققوا التملك الأدنى": cnt,
+                         "النسبة المئوية (%)": pct}).T
 
 
 def analyse(s, sd):
