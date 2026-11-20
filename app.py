@@ -10,6 +10,7 @@ import zlib
 import pandas as pd
 import streamlit as st
 
+import ai as _ai
 import logic as L
 from data import CRITERIA, DIAGNOSTIC, INDICATORS
 import report as _report
@@ -18,7 +19,7 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 # ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
 import importlib
 
-NEED = 6
+NEED = 7
 for _m in (L, _report):
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
@@ -263,6 +264,8 @@ def _reset_rem(name, key):
 
 
 with t3:
+    gk = f"aigen_{cid}_{subj}"  # يتغيّر بعد التوليد لتتحدّث خانات الاختيار بالقيم الجديدة
+    gen = st.session_state.get(gk, 0)
     if an is None:
         st.info("أضف تلاميذ لعرض التشخيص.")
     else:
@@ -289,7 +292,7 @@ with t3:
                     x.markdown("**الأخطاء المرصودة**\n\n" + "\n".join(f"- {e}" for e in dg["errors"]))
                     y.markdown("**تأويل الخطأ والأسباب**\n\n" + "\n".join(f"- {e}" for e in dg["causes"]))
                 saved = L.remedies(sd, subj, nm)
-                key, nkey = f"rm_{cid}_{subj}_{c['id']}", f"rmn_{cid}_{subj}_{c['id']}"
+                key, nkey = f"rm_{cid}_{subj}_{c['id']}_{gen}", f"rmn_{cid}_{subj}_{c['id']}_{gen}"
                 if key not in st.session_state:
                     st.session_state[key] = saved
                 opts = list(dict.fromkeys(L.remedy_presets(subj) + saved))
@@ -341,13 +344,36 @@ with t3:
                     cur = n_rem.get(x, L.default_rem(subj, x))
                     n_rem[x] = st.multiselect("الحلول العلاجية المقترحة: " + (x if len(x) < 60 else x[:57] + "…"),
                                               list(dict.fromkeys(L.suggest(subj, x) + cur)), default=cur,
-                                              key=f"pfr_{k}_{zlib.crc32(x.encode())}")
+                                              key=f"pfr_{k}_{zlib.crc32(x.encode())}_{gen}")
                 n_cus[sk] = st.text_area("حلول علاجية مخصصة (سطر لكل حل)", pf["custom"].get(sk, ""), height=70,
                                           key=f"pfx_{k}_{zlib.crc32(lab.encode())}")
-        newpf = {"sel": n_sel, "rem": n_rem, "custom": n_cus}
+        newpf = {"sel": n_sel, "rem": n_rem, "custom": n_cus, "diag": pf.get("diag", {})}
         if newpf != pf:
             sd["perf"] = newpf
             L.save(cid, data)
+    st.markdown("#### ✨ الخطة العلاجية بالذكاء الاصطناعي")
+    plan_now = L.perf_plan(cls["year"], subj, sd)
+    if an is None:
+        st.info("أدخل نقاط التلاميذ أولاً.")
+    elif not _ai.available():
+        st.info("لتفعيل الميزة أضف المفتاح ANTHROPIC_API_KEY في Secrets (Manage app ← Settings ← Secrets).")
+    elif not plan_now:
+        st.info("اختر الأداء المنتظر المستهدف في الأعلى أولاً، ثم ولّد الخطة.")
+    else:
+        st.caption("يُرسَل إلى النموذج: نسب التملك المجمّعة ونصوص الأداء المنتظر فقط — دون أسماء ودون نقاط فردية. "
+                   "النتيجة تحلّ محل الحلول الحالية للمكوّنات المختارة، وتبقى قابلة للتعديل.")
+        if sd.get("ai"):
+            st.caption(f"آخر توليد: {sd['ai']['date']}")
+        if st.button("✨ ولّد الخطة العلاجية", type="primary", key=f"aib_{k}"):
+            try:
+                with st.spinner("جارٍ تحليل النتائج وإعداد الخطة العلاجية..."):
+                    payload, ids = L.ai_payload(cls, subj, sd, an[0], an[1], plan_now)
+                    n = L.apply_ai(sd, subj, ids, _ai.generate_plan(payload))
+                    L.save(cid, data)
+                st.session_state[gk] = gen + 1
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"تعذّر التوليد: {e}")
     perf = st.text_area("ملاحظات / أداء منتظر إضافي بنص حر (اتركه فارغاً مع عدم اختيار شيء لطباعة أسطر منقطة)",
                         pg["performance"], height=90, key=f"pgp_{k}")
     newpg = {"domain": dom, "subject": sub_c, "assessment": assess, "performance": perf}

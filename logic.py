@@ -12,7 +12,7 @@ import pandas as pd
 from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
 from performance import PERFORMANCE, default_rem, suggest  # noqa: F401
 
-VERSION = 6  # يُقارَن بما يتوقعه app.py
+VERSION = 7  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
@@ -123,6 +123,7 @@ def subject(data, s):
     if d["page"].get("performance") in _OLD_PERF:  # نص افتراضي قديم حلّت محلّه القوائم الجاهزة
         d["page"]["performance"] = ""
     d.setdefault("perf", {"sel": {}, "rem": {}, "custom": {}})
+    d["perf"].setdefault("diag", {})
     return d
 
 
@@ -147,10 +148,54 @@ def perf_plan(year, s, sd):
         if key not in pf["sel"]:
             continue
         valid = [t for t, _ in e["items"]] or [e["intro"]]
-        parts = [{"text": t, "remedies": pf["rem"].get(t, default_rem(s, t))} for t in pf["sel"][key] if t in valid]
+        parts = [{"text": t, "remedies": pf["rem"].get(t, default_rem(s, t)), "diag": pf.get("diag", {}).get(t, "")}
+                 for t in pf["sel"][key] if t in valid]
         custom = [x.strip() for x in pf["custom"].get(key, "").splitlines() if x.strip()]
         out.append({"label": e["label"], "intro": e["intro"] if e["items"] else "", "parts": parts, "custom": custom})
     return out
+
+
+def ai_payload(cls, s, sd, res, st_df, plan):
+    """معطيات مجمّعة فقط (بلا أسماء ولا نقاط فردية) تُرسل للنموذج، مع خريطة id → نص المكوّن"""
+    ids, parts, i = {}, [], 0
+    for e in plan:
+        comps = []
+        for p in e["parts"]:
+            i += 1
+            ids[f"p{i}"] = p["text"]
+            comps.append({"id": f"p{i}", "النص": p["text"]})
+        parts.append({"الفترة": e["label"], "المكونات": comps})
+    crits = []
+    for c in CRITERIA[s]:
+        dg = DIAGNOSTIC[s].get(c["name"], {})
+        crits.append({"المعيار": c["name"], "نسبة التملك %": float(st_df.loc["النسبة المئوية (%)", c["name"]]),
+                      "عدد المتعثرين": len(weak(res, c, sd)), "أخطاء معروفة": dg.get("errors", []),
+                      "أسباب معروفة": dg.get("causes", [])})
+    payload = {"المستوى": YEARS[cls["year"]], "الدرجة": cls["degree"], "المادة": s, "عدد التلاميذ": len(res),
+               "عتبة التنبيه %": sd["alert"], "المعايير": crits, "الأداء المنتظر": parts,
+               "أمثلة على أسلوب الحلول": remedy_presets(s)[:4]}
+    return payload, ids
+
+
+def apply_ai(sd, s, ids, out):
+    """يكتب ناتج النموذج في بيانات القسم (قابل للتعديل لاحقاً يدوياً). يعيد عدد المكوّنات المحدّثة"""
+    import datetime
+    pf, n = sd["perf"], 0
+    for p in out.get("parts", []):
+        text = ids.get(p.get("id"))
+        if not text:
+            continue
+        if p.get("remedies"):
+            pf["rem"][text] = p["remedies"]
+            n += 1
+        if p.get("diagnosis"):
+            pf["diag"][text] = p["diagnosis"]
+    names = {c["name"] for c in CRITERIA[s]}
+    for c in out.get("criteria", []):
+        if c.get("name") in names and c.get("remedies"):
+            sd["remedies"][c["name"]] = c["remedies"]
+    sd["ai"] = {"date": datetime.date.today().isoformat()}
+    return n
 
 
 def assess_options(s):

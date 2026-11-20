@@ -9,7 +9,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm
 
-VERSION = 6
+VERSION = 7
 FONT = "Arial"
 
 
@@ -20,9 +20,12 @@ def _el(tag, **attrs):
     return e
 
 
-def _par(container, text, size=11, bold=False, first=None, color=None):
+def _par(container, text, size=11, bold=False, first=None, color=None, pb=False):
     p = first if first is not None else container.add_paragraph()
-    p._p.get_or_add_pPr().append(_el("bidi"))
+    pPr = p._p.get_or_add_pPr()
+    if pb:  # بداية صفحة جديدة دون فقرة فاصلة (تفادي الصفحات البيضاء)
+        pPr.append(_el("pageBreakBefore"))
+    pPr.append(_el("bidi"))
     r = p.add_run(str(text))
     rPr = r._r.get_or_add_rPr()
     rPr.append(_el("rFonts", ascii=FONT, hAnsi=FONT, cs=FONT))
@@ -73,8 +76,7 @@ def _dotted(doc):
 
 def _page(doc, subject, pg, plan):
     """صفحة «الكفايات والأداء المنتظر» + الخطة العلاجية حسب الأداء المنتظر"""
-    doc.add_page_break()
-    _par(doc, "الكفايات والأداء المنتظر.", 16, True, color="2F5597")
+    _par(doc, "الكفايات والأداء المنتظر.", 16, True, color="2F5597", pb=True)
     _par(doc, "")
     _table(doc, ["المادة", "كفاية المجال", "كفاية المادة", "نوع التقييم"],
            [[(subject,), pg["domain"], pg["subject"], pg["assessment"]]],
@@ -96,15 +98,18 @@ def _page(doc, subject, pg, plan):
     if plan:
         _par(doc, "")
         _par(doc, "الخطة العلاجية حسب الأداء المنتظر", 13, True)
+        has = any(p.get("diag") for e in plan for p in e["parts"])
         rows = []
         for e in plan:
             first = True
             for p in e["parts"]:
-                rows.append([(e["label"],) if first else "", p["text"], p["remedies"] or "—"])
+                rows.append([(e["label"],) if first else "", p["text"]] + ([p.get("diag") or "—"] if has else [])
+                            + [p["remedies"] or "—"])
                 first = False
             if e["custom"]:
-                rows.append([(e["label"],) if first else "", "حلول مخصصة", e["custom"]])
-        _table(doc, ["الفترة / الوحدة", "الأداء المنتظر المستهدف", "الحلول العلاجية المقترحة"], rows, size=10)
+                rows.append([(e["label"],) if first else "", "حلول مخصصة"] + (["—"] if has else []) + [e["custom"]])
+        _table(doc, ["الفترة / الوحدة", "الأداء المنتظر المستهدف"] + (["التشخيص"] if has else [])
+               + ["الحلول العلاجية المقترحة"], rows, size=10)
 
 
 def build_docx(meta, items):
@@ -122,8 +127,7 @@ def build_docx(meta, items):
     _par(doc, f"القسم: {meta['class_name']}    المستوى: {meta['level']}    {meta['degree']}")
 
     for it in items:
-        doc.add_page_break()
-        _par(doc, f"مادة {it['subject']}", 16, True)
+        _par(doc, f"مادة {it['subject']}", 16, True, pb=True)
         res, st_df = it["res"], it["st_df"]
         _par(doc, "الجدول الإجمالي للنتائج", 13, True)
         _table(doc, ["الرقم"] + list(res.columns),
