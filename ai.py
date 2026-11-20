@@ -5,7 +5,8 @@ import json
 import os
 
 MODEL_DEFAULT = "claude-sonnet-5-5"  # يمكن تغييره بإضافة ANTHROPIC_MODEL في Secrets
-GEMINI_DEFAULT = "gemini-2.5-flash"  # يمكن تغييره بإضافة GEMINI_MODEL في Secrets
+GEMINI_DEFAULT = "gemini-3.8-flash"  # يمكن تغييره بإضافة GEMINI_MODEL في Secrets
+GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash")  # تُجرَّب إن كان النموذج غير متاح (404)
 
 SYSTEM = """أنت مستشار بيداغوجي خبير بالتعليم الابتدائي التونسي (الرياضيات والإيقاظ العلمي).
 تصلك رسالة JSON فيها: مستوى القسم ودرجته ومادته، وإحصائيات مجمّعة لنسب تملك المعايير، والأداء المنتظر المستهدف في التقييم، وأخطاء وأسباب معروفة لكل معيار.
@@ -70,20 +71,26 @@ def _call_gemini(content):
     """استدعاء REST مباشر (بلا مكتبة إضافية) — يعمل بالمفتاح المجاني من Google AI Studio"""
     import urllib.error
     import urllib.request
-    model = _secret("GEMINI_MODEL") or GEMINI_DEFAULT
-    body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
-            "contents": [{"role": "user", "parts": [{"text": content}]}],
-            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192,
-                                 "responseMimeType": "application/json"}}
-    req = urllib.request.Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": _secret("GEMINI_API_KEY")})
-    try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Gemini ({e.code}): {e.read().decode('utf-8', 'ignore')[:300]}") from e
+    body = json.dumps({"systemInstruction": {"parts": [{"text": SYSTEM}]},
+                       "contents": [{"role": "user", "parts": [{"text": content}]}],
+                       "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192,
+                                            "responseMimeType": "application/json"}}).encode("utf-8")
+    first = _secret("GEMINI_MODEL") or GEMINI_DEFAULT
+    models = list(dict.fromkeys([first, *GEMINI_FALLBACKS]))
+    data = None
+    for k, model in enumerate(models):
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", data=body,
+            headers={"Content-Type": "application/json", "x-goog-api-key": _secret("GEMINI_API_KEY")})
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode("utf-8", "ignore")[:300]
+            if e.code == 404 and k < len(models) - 1:  # نموذج غير متاح: جرّب التالي
+                continue
+            raise RuntimeError(f"Gemini ({e.code}، النموذج {model}): {msg}") from e
     cands = data.get("candidates") or []
     if not cands:
         raise RuntimeError(f"لم يُرجع Gemini أي رد: {str(data.get('promptFeedback', ''))[:200]}")
