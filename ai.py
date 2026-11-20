@@ -5,6 +5,7 @@ import json
 import os
 
 MODEL_DEFAULT = "claude-sonnet-5-5"  # يمكن تغييره بإضافة ANTHROPIC_MODEL في Secrets
+GEMINI_DEFAULT = "gemini-2.5-flash"  # يمكن تغييره بإضافة GEMINI_MODEL في Secrets
 
 SYSTEM = """أنت مستشار بيداغوجي خبير بالتعليم الابتدائي التونسي (الرياضيات والإيقاظ العلمي).
 تصلك رسالة JSON فيها: مستوى القسم ودرجته ومادته، وإحصائيات مجمّعة لنسب تملك المعايير، والأداء المنتظر المستهدف في التقييم، وأخطاء وأسباب معروفة لكل معيار.
@@ -28,8 +29,15 @@ def _secret(name):
     return v or os.environ.get(name)
 
 
+def provider():
+    """gemini (مجاني) إن وُجد مفتاحه، وإلا claude"""
+    if _secret("GEMINI_API_KEY"):
+        return "gemini"
+    return "claude" if _secret("ANTHROPIC_API_KEY") else None
+
+
 def available():
-    return bool(_secret("ANTHROPIC_API_KEY"))
+    return provider() is not None
 
 
 def _lines(v):
@@ -50,18 +58,44 @@ def parse(text):
     return obj
 
 
-def generate_plan(payload):
+def _call_claude(content):
     import anthropic
     client = anthropic.Anthropic(api_key=_secret("ANTHROPIC_API_KEY"))
-    model = _secret("ANTHROPIC_MODEL") or MODEL_DEFAULT
+    msg = client.messages.create(model=_secret("ANTHROPIC_MODEL") or MODEL_DEFAULT, max_tokens=4000,
+                                 system=SYSTEM, messages=[{"role": "user", "content": content}])
+    return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+
+
+def _call_gemini(content):
+    """استدعاء REST مباشر (بلا مكتبة إضافية) — يعمل بالمفتاح المجاني من Google AI Studio"""
+    import urllib.error
+    import urllib.request
+    model = _secret("GEMINI_MODEL") or GEMINI_DEFAULT
+    body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{"text": content}]}],
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192,
+                                 "responseMimeType": "application/json"}}
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": _secret("GEMINI_API_KEY")})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            data = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Gemini ({e.code}): {e.read().decode('utf-8', 'ignore')[:300]}") from e
+    cands = data.get("candidates") or []
+    if not cands:
+        raise RuntimeError(f"لم يُرجع Gemini أي رد: {str(data.get('promptFeedback', ''))[:200]}")
+    return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+
+
+def generate_plan(payload):
+    call = _call_gemini if provider() == "gemini" else _call_claude
     content = json.dumps(payload, ensure_ascii=False)
     err = None
     for attempt in range(2):
-        msg = client.messages.create(
-            model=model, max_tokens=4000, system=SYSTEM,
-            messages=[{"role": "user",
-                       "content": content if attempt == 0 else content + "\n\nأعد الإجابة بـ JSON صالح فقط."}])
-        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+        text = call(content if attempt == 0 else content + "\n\nأعد الإجابة بـ JSON صالح فقط.")
         try:
             return parse(text)
         except Exception as e:  # noqa: BLE001

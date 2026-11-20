@@ -356,7 +356,8 @@ with t3:
     if an is None:
         st.info("أدخل نقاط التلاميذ أولاً.")
     elif not _ai.available():
-        st.info("لتفعيل الميزة أضف المفتاح ANTHROPIC_API_KEY في Secrets (Manage app ← Settings ← Secrets).")
+        st.info("لتفعيل الميزة أضف مفتاحاً في Secrets (Manage app ← Settings ← Secrets): "
+                "GEMINI_API_KEY (مجاني من Google AI Studio) أو ANTHROPIC_API_KEY.")
     elif not plan_now:
         st.info("اختر الأداء المنتظر المستهدف في الأعلى أولاً، ثم ولّد الخطة.")
     else:
