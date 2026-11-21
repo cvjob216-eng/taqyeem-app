@@ -4,6 +4,8 @@
 import json
 import os
 
+VERSION = 8  # يُقارَن بما يتوقعه app.py
+
 MODEL_DEFAULT = "claude-sonnet-5-5"  # يمكن تغييره بإضافة ANTHROPIC_MODEL في Secrets
 GEMINI_DEFAULT = "gemini-3.8-flash"  # يمكن تغييره بإضافة GEMINI_MODEL في Secrets
 GEMINI_FALLBACKS = ("gemini-3.8-flash", "gemini-3.5-flash")  # تُجرَّب إن كان النموذج غير متاح أو مزدحماً

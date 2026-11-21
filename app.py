@@ -20,12 +20,14 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 import importlib
 
 NEED = 8
-for _m in (L, _report):
+_MODS = (("logic.py", L), ("report.py", _report), ("ai.py", _ai))
+for _n, _m in _MODS:
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
-if getattr(L, "VERSION", 0) < NEED or getattr(_report, "VERSION", 0) < NEED:
-    st.error("ملفا logic.py و/أو report.py على الخادم أقدم من app.py. ارفع النسخ الجديدة إلى GitHub "
-             "(في نفس مجلد app.py) ثم Manage app ← Reboot app.")
+_old = [n for n, m in _MODS if getattr(m, "VERSION", 0) < NEED]
+if _old:
+    st.error("هذه الملفات على الخادم أقدم من app.py: " + "، ".join(_old) + ". ارفع النسخ الجديدة إلى GitHub "
+             "(في نفس مجلد app.py وبنفس الأسماء) ثم Manage app ← Reboot app.")
     st.stop()
 
 st.markdown("""<style>
