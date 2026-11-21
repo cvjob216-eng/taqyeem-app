@@ -289,12 +289,13 @@ with t3:
         st.info("أدخل نقاط التلاميذ أولاً (تُستعمل نسب التملك في التشخيص).")
     elif not _ai.available():
         st.info("لتفعيل التوليد أضف مفتاحاً في Secrets (Manage app ← Settings ← Secrets): "
-                "GEMINI_API_KEY (مجاني من Google AI Studio) أو ANTHROPIC_API_KEY. "
+                "GROQ_API_KEY (مجاني بلا بطاقة) أو GEMINI_API_KEY (مجاني) أو ANTHROPIC_API_KEY. "
                 "وفي الأثناء يمكنك كتابة الأخطاء والعلاج يدوياً في الخانات أدناه.")
     else:
         st.caption("يُرسَل إلى النموذج: المستوى والمادة ونص الأداء المنتظر ونسب التملك المجمّعة — دون أسماء ودون "
                    "نقاط فردية. الأخطاء المقترحة هي الأرجح عند هذا المستوى وليست مأخوذة من أوراق التلاميذ، "
                    "فراجعها وعدّلها.")
+        st.caption("المزوّدون المفعّلون (بترتيب التجربة): " + " ← ".join(_ai.providers()))
         if pl.get("date"):
             st.caption(f"آخر توليد: {pl['date']}")
         if st.button("✨ ولّد الأخطاء والخطة العلاجية", type="primary", key=f"aib_{pk}"):
