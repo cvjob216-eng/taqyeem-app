@@ -9,10 +9,10 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
-from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, PAGE_DEFAULTS
+from data import CRITERIA, DEFAULT_MAX, DIAGNOSTIC, INDICATORS, PAGE_DEFAULTS
 from performance import PERFORMANCE, default_rem, suggest  # noqa: F401
 
-VERSION = 7  # يُقارَن بما يتوقعه app.py
+VERSION = 8  # يُقارَن بما يتوقعه app.py
 ROOT = Path(os.environ.get("TAQYEEM_DATA", "data"))
 INDEX, SETTINGS, CLS_DIR = ROOT / "classes.json", ROOT / "settings.json", ROOT / "classes"
 DEGREES = ["الدرجة الثانية", "الدرجة الثالثة"]
@@ -124,6 +124,7 @@ def subject(data, s):
         d["page"]["performance"] = ""
     d.setdefault("perf", {"sel": {}, "rem": {}, "custom": {}})
     d["perf"].setdefault("diag", {})
+    d.setdefault("plan", {"label": "", "text": "", "items": {}})
     return d
 
 
@@ -155,46 +156,72 @@ def perf_plan(year, s, sd):
     return out
 
 
-def ai_payload(cls, s, sd, res, st_df, plan):
+def parse_perf(text):
+    """يفكّك نص الأداء المنتظر إلى (مقدّمة، قائمة مكوّنات)؛ المقدّمة هي السطر الأول إن انتهى بنقطتين"""
+    lines = []
+    for raw in text.replace("\r", "").split("\n"):
+        for seg in re.split(r"\s*[•●▪◦]\s*", raw):
+            s = re.sub(r"^\s*(?:[-–—*]|\d+[.)\-])\s+", "", seg).strip()
+            if s:
+                lines.append(s)
+    if len(lines) > 1 and re.search(r"[:：]\s*$", lines[0]):
+        return lines[0], lines[1:]
+    return "", lines
+
+
+def students_for(res, sd, s, names):
+    """التلاميذ الذين نالوا أقل من العتبة في أحد المعايير المذكورة (بترتيب القائمة)"""
+    ids = {c["name"]: c for c in CRITERIA[s]}
+    bad = set()
+    for n in names:
+        if n in ids:
+            bad.update(weak(res, ids[n], sd))
+    return [n for n in res[NAME] if n in bad]
+
+
+def crit_rows(s, sd, res, st_df):
+    return [{"name": c["name"], "pct": float(st_df.loc["النسبة المئوية (%)", c["name"]]),
+             "weak": weak(res, c, sd)} for c in CRITERIA[s]]
+
+
+def plan_view(sd, s, res):
+    """الأداء المنتظر منظّماً مع الأخطاء والأسباب والعلاج والتلاميذ المعنيين (للتقرير)"""
+    pl = sd["plan"]
+    intro, parts = parse_perf(pl["text"])
+    rows = []
+    for t in parts:
+        it = pl["items"].get(t, {})
+        crs = it.get("criteria", [])
+        rows.append({"text": t, "criteria": crs, "errors": it.get("errors", []), "causes": it.get("causes", []),
+                     "remedies": it.get("remedies", []),
+                     "students": students_for(res, sd, s, crs) if res is not None else []})
+    return {"label": pl["label"], "intro": intro, "parts": rows}
+
+
+def ai_payload(cls, s, sd, res, st_df, intro, parts):
     """معطيات مجمّعة فقط (بلا أسماء ولا نقاط فردية) تُرسل للنموذج، مع خريطة id → نص المكوّن"""
-    ids, parts, i = {}, [], 0
-    for e in plan:
-        comps = []
-        for p in e["parts"]:
-            i += 1
-            ids[f"p{i}"] = p["text"]
-            comps.append({"id": f"p{i}", "النص": p["text"]})
-        parts.append({"الفترة": e["label"], "المكونات": comps})
-    crits = []
-    for c in CRITERIA[s]:
-        dg = DIAGNOSTIC[s].get(c["name"], {})
-        crits.append({"المعيار": c["name"], "نسبة التملك %": float(st_df.loc["النسبة المئوية (%)", c["name"]]),
-                      "عدد المتعثرين": len(weak(res, c, sd)), "أخطاء معروفة": dg.get("errors", []),
-                      "أسباب معروفة": dg.get("causes", [])})
+    ids = {f"p{i}": t for i, t in enumerate(parts, 1)}
+    crits = [{"المعيار": r["name"], "نسبة التملك %": r["pct"], "عدد المتعثرين": len(r["weak"]),
+              "مؤشرات": INDICATORS.get((s, cls["degree"]), {}).get(r["name"], [])}
+             for r in crit_rows(s, sd, res, st_df)]
     payload = {"المستوى": YEARS[cls["year"]], "الدرجة": cls["degree"], "المادة": s, "عدد التلاميذ": len(res),
-               "عتبة التنبيه %": sd["alert"], "المعايير": crits, "الأداء المنتظر": parts,
-               "أمثلة على أسلوب الحلول": remedy_presets(s)[:4]}
+               "عتبة التنبيه %": sd["alert"], "المعايير": crits,
+               "الأداء المنتظر": {"العنوان": sd["plan"]["label"], "المقدمة": intro,
+                                  "المكونات": [{"id": k, "النص": v} for k, v in ids.items()]}}
     return payload, ids
 
 
 def apply_ai(sd, s, ids, out):
-    """يكتب ناتج النموذج في بيانات القسم (قابل للتعديل لاحقاً يدوياً). يعيد عدد المكوّنات المحدّثة"""
+    """يكتب ناتج النموذج في خطة القسم (قابل للتعديل لاحقاً يدوياً). يعيد عدد المكوّنات المحدّثة"""
     import datetime
-    pf, n = sd["perf"], 0
+    pl, names, n = sd["plan"], {c["name"] for c in CRITERIA[s]}, 0
     for p in out.get("parts", []):
         text = ids.get(p.get("id"))
-        if not text:
-            continue
-        if p.get("remedies"):
-            pf["rem"][text] = p["remedies"]
+        if text:
+            pl["items"][text] = {"criteria": [c for c in p["criteria"] if c in names], "errors": p["errors"],
+                                 "causes": p["causes"], "remedies": p["remedies"]}
             n += 1
-        if p.get("diagnosis"):
-            pf["diag"][text] = p["diagnosis"]
-    names = {c["name"] for c in CRITERIA[s]}
-    for c in out.get("criteria", []):
-        if c.get("name") in names and c.get("remedies"):
-            sd["remedies"][c["name"]] = c["remedies"]
-    sd["ai"] = {"date": datetime.date.today().isoformat()}
+    pl["date"] = datetime.date.today().isoformat()
     return n
 
 

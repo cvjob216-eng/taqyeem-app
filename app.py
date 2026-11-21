@@ -19,7 +19,7 @@ st.set_page_config(page_title="دفتر التقييم والمتابعة", page
 # ---------- تحقق من تطابق إصدارات الملفات على الخادم ----------
 import importlib
 
-NEED = 7
+NEED = 8
 for _m in (L, _report):
     if getattr(_m, "VERSION", 0) < NEED:
         importlib.reload(_m)  # قد تكون الوحدة قديمة في الذاكرة فقط
@@ -245,176 +245,142 @@ with t2:
         st.caption("التملك = الحصول على العتبة أو أكثر من أقصى درجة المعيار (الخانة الفارغة تُحسب غير متملكة) · "
                    "النسبة = عدد المتملكين ÷ عدد التلاميذ × 100")
 
-# ---------- 3) التشخيص والعلاج ----------
-def _save_rem(name, key, nkey):
-    sel, extra = list(st.session_state[key]), st.session_state[nkey].strip()
-    if extra and extra not in sel:
-        sel.append(extra)
-    dt = L.load(cid)
-    L.subject(dt, subj)["remedies"][name] = sel
-    L.save(cid, dt)
-    st.session_state[key], st.session_state[nkey] = sel, ""
+# ---------- 3) الأداء المنتظر والأخطاء والخطة العلاجية ----------
+def _insert_cat(pk, cat, name):
+    e = next(x for x in cat if x["label"] == name)
+    body = [e["intro"]] + [f"• {x}" for x, alt in e["items"] if not alt]
+    st.session_state[f"plt_{pk}"] = "\n".join(body)
+    st.session_state[f"plb_{pk}"] = e["label"]
 
 
-def _reset_rem(name, key):
-    dt = L.load(cid)
-    L.subject(dt, subj)["remedies"].pop(name, None)
-    L.save(cid, dt)
-    st.session_state[key] = L.remedies(L.subject(dt, subj), subj, name)
+def _lines(s):
+    return [x.strip() for x in s.splitlines() if x.strip()]
 
 
 with t3:
-    gk = f"aigen_{cid}_{subj}"  # يتغيّر بعد التوليد لتتحدّث خانات الاختيار بالقيم الجديدة
+    gk = f"aigen_{cid}_{subj}"  # يتغيّر بعد التوليد لتتحدّث الخانات بالقيم الجديدة
     gen = st.session_state.get(gk, 0)
-    if an is None:
-        st.info("أضف تلاميذ لعرض التشخيص.")
-    else:
-        res, st_df = an
-        plan = pd.DataFrame([{"المعيار": c["name"], "التملك %": st_df.loc["النسبة المئوية (%)", c["name"]],
-                              "التلاميذ المعنيون بالخطة العلاجية": "، ".join(L.weak(res, c, sd)) or "—",
-                              "الجهاز العلاجي": " | ".join(L.remedies(sd, subj, c["name"])) or "—"}
-                             for c in crit])
-        st.markdown("**الخطة العلاجية** — التلاميذ الذين نالوا أقل من نصف درجة المعيار يُدرجون تلقائياً")
-        st.dataframe(plan, use_container_width=True, hide_index=True)
-        for c in crit:
-            nm = c["name"]
-            p = st_df.loc["النسبة المئوية (%)", nm]
-            ws = L.weak(res, c, sd)
-            with st.expander(f"{'🔴' if p < sd['alert'] else '🟢'} {nm} — التملك {p}% — متعثرون: {len(ws)}",
-                             expanded=p < sd["alert"]):
-                st.markdown("**التلاميذ المعنيون بالمعالجة:** " + ("، ".join(ws) if ws else "لا أحد ✅"))
-                ind = INDICATORS.get((subj, cls["degree"]), {}).get(nm)
-                if ind:
-                    st.markdown("**مؤشرات المعيار (" + cls["degree"] + "):** " + " · ".join(ind))
-                dg = DIAGNOSTIC[subj].get(nm)
-                if dg:
-                    x, y = st.columns(2)
-                    x.markdown("**الأخطاء المرصودة**\n\n" + "\n".join(f"- {e}" for e in dg["errors"]))
-                    y.markdown("**تأويل الخطأ والأسباب**\n\n" + "\n".join(f"- {e}" for e in dg["causes"]))
-                saved = L.remedies(sd, subj, nm)
-                key, nkey = f"rm_{cid}_{subj}_{c['id']}_{gen}", f"rmn_{cid}_{subj}_{c['id']}_{gen}"
-                if key not in st.session_state:
-                    st.session_state[key] = saved
-                opts = list(dict.fromkeys(L.remedy_presets(subj) + saved))
-                st.multiselect("الجهاز العلاجي — اختر من الخيارات", opts, key=key)
-                st.text_area("أو اكتب علاجاً مخصصاً", key=nkey, height=70)
-                x, y, _ = st.columns([1, 1, 4])
-                x.button("💾 حفظ", key=f"sv_{key}", on_click=_save_rem, args=(nm, key, nkey))
-                y.button("↩️ الافتراضي", key=f"rs_{key}", on_click=_reset_rem, args=(nm, key))
+    pl, pk = sd["plan"], f"{cid}_{subj}"
+    st.markdown("#### 🎯 الأداء المنتظر لهذا التقييم")
+    st.caption("الصق نص الأداء المنتظر كما هو (فترة أو ثلاثي). تفكّكه المنصة إلى مكوّنات وتنظّمها في الجدول "
+               "وتتعامل معه كمعلم يشخّص الأخطاء ويقترح العلاج.")
+    cat = L.catalog(cls["year"], subj)
+    if cat:
+        with st.expander("📚 إدراج نص جاهز من القوائم (اختياري — يمكنك تعديله بعد الإدراج)"):
+            ch = st.selectbox("الفترة / الوحدة", [e["label"] for e in cat], key=f"plc_{pk}")
+            st.button("إدراج في الخانة", key=f"pli_{pk}", on_click=_insert_cat, args=(pk, cat, ch))
+    st.session_state.setdefault(f"plb_{pk}", pl["label"])
+    st.session_state.setdefault(f"plt_{pk}", pl["text"])
+    label = st.text_input("عنوان الفترة / الوحدة (مثال: الفترة الثالثة)", key=f"plb_{pk}")
+    text = st.text_area("نص الأداء المنتظر", height=170, key=f"plt_{pk}",
+                        placeholder="أن يحل المتعلم وضعيات مشكل دالة بـ:\n• ...\n• ...")
+    intro, parts = L.parse_perf(text)
+    keep = {x: v for x, v in pl["items"].items() if x in parts}
+    if (label, text) != (pl["label"], pl["text"]) or keep != pl["items"]:
+        pl.update(label=label, text=text, items=keep)
+        L.save(cid, data)
+    if parts:
+        st.markdown("**المكوّنات المستخرجة:**\n\n" + "\n".join(f"{n}. {x}" for n, x in enumerate(parts, 1)))
 
-    st.divider()
-    st.markdown("### 📑 صفحة الكفايات والأداء المنتظر")
-    pg, k = sd["page"], f"{cid}_{subj}_{cls['year']}"
-    a, b = st.columns(2)
-    dom = a.text_input("كفاية المجال", pg["domain"], key=f"pgd_{k}")
-    sub_c = b.text_input("كفاية المادة", pg["subject"], key=f"pgs_{k}")
-    opts = L.assess_options(subj)
-    cur = pg["assessment"]
-    ch = st.selectbox("نوع التقييم", opts, index=opts.index(cur) if cur in opts else len(opts) - 1,
-                      key=f"pga_{k}")
-    assess = st.text_input("نص نوع التقييم", cur if cur not in opts else "", key=f"pgc_{k}") \
-        if ch == opts[-1] else ch
-    st.markdown("#### 🎯 الأداء المنتظر المستهدف في هذا التقييم")
-    cat, pf = L.catalog(cls["year"], subj), sd["perf"]
-    if not cat:
-        st.info("لا توجد قائمة جاهزة لهذا المستوى (القوائم متوفرة للسنوات 4 و5 و6)، استعمل الخانة الحرة أدناه.")
-    else:
-        labels = [e["label"] for e in cat]
-        chosen = st.multiselect("اختر الفترات / الوحدات المستهدفة (تُنظَّم تلقائياً في الملف النهائي)", labels,
-                                default=[x for x in labels if L.perf_key(cls["year"], x) in pf["sel"]], key=f"pfc_{k}")
-        n_sel, n_rem, n_cus = {}, dict(pf["rem"]), {}
-        for e in cat:
-            lab = e["label"]
-            if lab not in chosen:
-                continue
-            with st.expander(lab, expanded=True):
-                st.markdown(f"**{e['intro']}**")
-                if e["items"]:
-                    texts = [x for x, _ in e["items"]]
-                    sk = L.perf_key(cls["year"], lab)
-                    saved = [x for x in pf["sel"].get(sk, []) if x in texts] if sk in pf["sel"] else None
-                    picked = st.multiselect("المكوّنات المعتمدة (الصياغات البديلة غير مفعّلة افتراضياً)", texts,
-                                            default=saved if saved is not None else [x for x, a in e["items"] if not a],
-                                            key=f"pfb_{k}_{zlib.crc32(lab.encode())}")
-                else:
-                    picked = [e["intro"]]
-                sk = L.perf_key(cls["year"], lab)
-                n_sel[sk] = picked
-                for x in picked:
-                    cur = n_rem.get(x, L.default_rem(subj, x))
-                    n_rem[x] = st.multiselect("الحلول العلاجية المقترحة: " + (x if len(x) < 60 else x[:57] + "…"),
-                                              list(dict.fromkeys(L.suggest(subj, x) + cur)), default=cur,
-                                              key=f"pfr_{k}_{zlib.crc32(x.encode())}_{gen}")
-                n_cus[sk] = st.text_area("حلول علاجية مخصصة (سطر لكل حل)", pf["custom"].get(sk, ""), height=70,
-                                          key=f"pfx_{k}_{zlib.crc32(lab.encode())}")
-        newpf = {"sel": n_sel, "rem": n_rem, "custom": n_cus, "diag": pf.get("diag", {})}
-        if newpf != pf:
-            sd["perf"] = newpf
-            L.save(cid, data)
-    st.markdown("#### ✨ الخطة العلاجية بالذكاء الاصطناعي")
-    plan_now = L.perf_plan(cls["year"], subj, sd)
-    if an is None:
-        st.info("أدخل نقاط التلاميذ أولاً.")
+    st.markdown("#### ✨ الأخطاء المرصودة والخطة العلاجية")
+    if not parts:
+        st.info("الصق نص الأداء المنتظر أولاً.")
+    elif an is None:
+        st.info("أدخل نقاط التلاميذ أولاً (تُستعمل نسب التملك في التشخيص).")
     elif not _ai.available():
-        st.info("لتفعيل الميزة أضف مفتاحاً في Secrets (Manage app ← Settings ← Secrets): "
-                "GEMINI_API_KEY (مجاني من Google AI Studio) أو ANTHROPIC_API_KEY.")
-    elif not plan_now:
-        st.info("اختر الأداء المنتظر المستهدف في الأعلى أولاً، ثم ولّد الخطة.")
+        st.info("لتفعيل التوليد أضف مفتاحاً في Secrets (Manage app ← Settings ← Secrets): "
+                "GEMINI_API_KEY (مجاني من Google AI Studio) أو ANTHROPIC_API_KEY. "
+                "وفي الأثناء يمكنك كتابة الأخطاء والعلاج يدوياً في الخانات أدناه.")
     else:
-        st.caption("يُرسَل إلى النموذج: نسب التملك المجمّعة ونصوص الأداء المنتظر فقط — دون أسماء ودون نقاط فردية. "
-                   "النتيجة تحلّ محل الحلول الحالية للمكوّنات المختارة، وتبقى قابلة للتعديل.")
-        if sd.get("ai"):
-            st.caption(f"آخر توليد: {sd['ai']['date']}")
-        if st.button("✨ ولّد الخطة العلاجية", type="primary", key=f"aib_{k}"):
+        st.caption("يُرسَل إلى النموذج: المستوى والمادة ونص الأداء المنتظر ونسب التملك المجمّعة — دون أسماء ودون "
+                   "نقاط فردية. الأخطاء المقترحة هي الأرجح عند هذا المستوى وليست مأخوذة من أوراق التلاميذ، "
+                   "فراجعها وعدّلها.")
+        if pl.get("date"):
+            st.caption(f"آخر توليد: {pl['date']}")
+        if st.button("✨ ولّد الأخطاء والخطة العلاجية", type="primary", key=f"aib_{pk}"):
             try:
-                with st.spinner("جارٍ تحليل النتائج وإعداد الخطة العلاجية..."):
-                    payload, ids = L.ai_payload(cls, subj, sd, an[0], an[1], plan_now)
-                    n = L.apply_ai(sd, subj, ids, _ai.generate_plan(payload))
+                with st.spinner("جارٍ تحليل الأداء المنتظر وإعداد الخطة العلاجية..."):
+                    payload, ids = L.ai_payload(cls, subj, sd, an[0], an[1], intro, parts)
+                    L.apply_ai(sd, subj, ids, _ai.generate_plan(payload))
                     L.save(cid, data)
                 st.session_state[gk] = gen + 1
                 st.rerun()
             except Exception as e:  # noqa: BLE001
                 st.error(f"تعذّر التوليد: {e}")
-    perf = st.text_area("ملاحظات / أداء منتظر إضافي بنص حر (اتركه فارغاً مع عدم اختيار شيء لطباعة أسطر منقطة)",
-                        pg["performance"], height=90, key=f"pgp_{k}")
-    newpg = {"domain": dom, "subject": sub_c, "assessment": assess, "performance": perf}
+    if parts:
+        crit_names = [c["name"] for c in crit]
+        new_items = {}
+        for n, x in enumerate(parts, 1):
+            it, kk = pl["items"].get(x, {}), f"{pk}_{zlib.crc32(x.encode())}_{gen}"
+            with st.expander(f"{n}. {x if len(x) < 90 else x[:87] + '…'}",
+                             expanded=any(it.get(f) for f in ("errors", "causes", "remedies"))):
+                crs = st.multiselect("المعايير المرتبطة (لتحديد التلاميذ المعنيين)", crit_names,
+                                     default=[c for c in it.get("criteria", []) if c in crit_names], key=f"pc_{kk}")
+                err = st.text_area("الأخطاء المرصودة (سطر لكل خطأ)", "\n".join(it.get("errors", [])),
+                                   height=110, key=f"pe_{kk}")
+                cau = st.text_area("تأويل الخطأ والأسباب (سطر لكل سبب)", "\n".join(it.get("causes", [])),
+                                   height=90, key=f"pa_{kk}")
+                rem = st.text_area("الجهاز العلاجي (سطر لكل نشاط)", "\n".join(it.get("remedies", [])),
+                                   height=110, key=f"pr_{kk}")
+                new_items[x] = {"criteria": crs, "errors": _lines(err), "causes": _lines(cau), "remedies": _lines(rem)}
+                if an is not None:
+                    ws = L.students_for(an[0], sd, subj, crs)
+                    st.markdown("**التلاميذ المعنيون بالعلاج:** " + ("، ".join(ws) if ws else "لا أحد ✅"))
+        if new_items != pl["items"]:
+            pl["items"] = new_items
+            L.save(cid, data)
+    if an is not None:
+        with st.expander("📊 نظرة على المعايير (نسبة التملك والتلاميذ تحت العتبة)"):
+            st.dataframe(pd.DataFrame([{"المعيار": r["name"], "التملك %": r["pct"],
+                                        "التلاميذ تحت العتبة": "، ".join(r["weak"]) or "—"}
+                                       for r in L.crit_rows(subj, sd, an[0], an[1])]),
+                         use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("### 📑 صفحة الكفايات")
+    pg, k = sd["page"], f"{cid}_{subj}"
+    a, b = st.columns(2)
+    dom = a.text_input("كفاية المجال", pg["domain"], key=f"pgd_{k}")
+    sub_c = b.text_input("كفاية المادة", pg["subject"], key=f"pgs_{k}")
+    opts = L.assess_options(subj)
+    cur = pg["assessment"]
+    ch = st.selectbox("نوع التقييم", opts, index=opts.index(cur) if cur in opts else len(opts) - 1, key=f"pga_{k}")
+    assess = st.text_input("نص نوع التقييم", cur if cur not in opts else "", key=f"pgc_{k}") \
+        if ch == opts[-1] else ch
+    newpg = {**pg, "domain": dom, "subject": sub_c, "assessment": assess}
     if newpg != pg:
         sd["page"] = newpg
         L.save(cid, data)
 
 # ---------- 4) التصدير والنسخ ----------
 with t4:
-    items = []
+    st.markdown("**التقارير منفصلة لكل مادة** — ملف مستقل للرياضيات وآخر للإيقاظ العلمي.")
+    found = False
     for s in CRITERIA:
         sx = L.subject(data, s)
         r = L.analyse(s, sx)
         if r is None:
             continue
+        found = True
         res_s, st_s = r
-        diag = []
-        for c in CRITERIA[s]:
-            d = DIAGNOSTIC[s].get(c["name"], {"errors": [], "causes": []})
-            diag.append({"name": c["name"], "pct": st_s.loc["النسبة المئوية (%)", c["name"]],
-                         "weak": L.weak(res_s, c, sx), "errors": d["errors"], "causes": d["causes"],
-                         "remedies": L.remedies(sx, s, c["name"])})
-        items.append({"subject": s, "res": res_s, "st_df": st_s, "diag": diag, "page": sx["page"],
-                      "plan": L.perf_plan(cls["year"], s, sx)})
-    if items:
         meta = {**cfg, "class_name": cls["name"], "level": L.YEARS[cls["year"]], "degree": cls["degree"]}
-        st.download_button("📄 تصدير تقرير القسم إلى Word (docx)", _report.build_docx(meta, items),
-                           f"taqyeem_{cls['name']}.docx",
-                           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                           type="primary")
+        item = {"subject": s, "res": res_s, "st_df": st_s, "page": sx["page"], "plan": L.plan_view(sx, s, res_s),
+                "crit_rows": L.crit_rows(s, sx, res_s, st_s)}
+        st.markdown(f"##### مادة {s}")
+        a, b = st.columns(2)
+        a.download_button(f"📄 تقرير {s} (Word)", _report.build_docx(meta, [item]),
+                          f"taqyeem_{cls['name']}_{s}.docx",
+                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                          type="primary", key=f"dw_{cid}_{s}")
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as w:
-            for it in items:
-                it["res"].to_excel(w, sheet_name=f"{it['subject']} - نتائج", index=False)
-                it["st_df"].to_excel(w, sheet_name=f"{it['subject']} - إحصائيات")
-            for ws in w.book.worksheets:
-                ws.sheet_view.rightToLeft = True
-        st.download_button("📊 تصدير إلى Excel", buf.getvalue(), f"taqyeem_{cls['name']}.xlsx",
-                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
+            res_s.to_excel(w, sheet_name="نتائج", index=False)
+            st_s.to_excel(w, sheet_name="إحصائيات")
+            for ws_ in w.book.worksheets:
+                ws_.sheet_view.rightToLeft = True
+        b.download_button(f"📊 {s} (Excel)", buf.getvalue(), f"taqyeem_{cls['name']}_{s}.xlsx",
+                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"dx_{cid}_{s}")
+    if not found:
         st.info("لا توجد نتائج لتصديرها في هذا القسم بعد.")
     st.divider()
     st.markdown("**نسخة احتياطية لكل الأقسام** — احتفظ بها دورياً: ملفات الخادم قد تُمسح عند إعادة تشغيل التطبيق.")

@@ -9,7 +9,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm
 
-VERSION = 7
+VERSION = 8
 FONT = "Arial"
 
 
@@ -75,7 +75,7 @@ def _dotted(doc):
 
 
 def _page(doc, subject, pg, plan):
-    """صفحة «الكفايات والأداء المنتظر» + الخطة العلاجية حسب الأداء المنتظر"""
+    """صفحة «الكفايات والأداء المنتظر»"""
     _par(doc, "الكفايات والأداء المنتظر.", 16, True, color="2F5597", pb=True)
     _par(doc, "")
     _table(doc, ["المادة", "كفاية المجال", "كفاية المادة", "نوع التقييم"],
@@ -83,38 +83,21 @@ def _page(doc, subject, pg, plan):
            size=12, fill="1F1F7F", color="FFFFFF")
     _par(doc, "")
     _par(doc, "الأداء المنتظر:", 13, True)
-    lines = [ln for ln in pg["performance"].splitlines() if ln.strip()]
-    for e in plan:
-        _par(doc, e["label"], 12, True)
-        if e["intro"]:
-            _par(doc, e["intro"], 11)
-        for p in e["parts"]:
-            _par(doc, f"• {p['text']}", 11)
-    for ln in lines:
-        _par(doc, ln, 12)
-    if not plan and not lines:
+    if plan["label"]:
+        _par(doc, plan["label"], 12, True)
+    if plan["intro"]:
+        _par(doc, plan["intro"], 11)
+    for p in plan["parts"]:
+        _par(doc, f"• {p['text']}", 11)
+    if not plan["parts"]:
         for _ in range(6):
             _dotted(doc)
-    if plan:
-        _par(doc, "")
-        _par(doc, "الخطة العلاجية حسب الأداء المنتظر", 13, True)
-        has = any(p.get("diag") for e in plan for p in e["parts"])
-        rows = []
-        for e in plan:
-            first = True
-            for p in e["parts"]:
-                rows.append([(e["label"],) if first else "", p["text"]] + ([p.get("diag") or "—"] if has else [])
-                            + [p["remedies"] or "—"])
-                first = False
-            if e["custom"]:
-                rows.append([(e["label"],) if first else "", "حلول مخصصة"] + (["—"] if has else []) + [e["custom"]])
-        _table(doc, ["الفترة / الوحدة", "الأداء المنتظر المستهدف"] + (["التشخيص"] if has else [])
-               + ["الحلول العلاجية المقترحة"], rows, size=10)
 
 
 def build_docx(meta, items):
     """meta: school, teacher, year, class_name, level, degree
-    items: [{subject, res, st_df, diag:[{name, pct, weak, errors, causes, remedies}]}]"""
+    items: [{subject, res, st_df, page, plan:{label,intro,parts:[{text,errors,causes,remedies,students}]}, crit_rows}]
+    يُستعمل عادةً بمادة واحدة في كل ملف"""
     doc = Document()
     sec = doc.sections[0]
     sec.orientation = WD_ORIENT.LANDSCAPE
@@ -126,9 +109,9 @@ def build_docx(meta, items):
     _par(doc, f"المؤسسة: {meta['school']}    المربي: {meta['teacher']}    السنة الدراسية: {meta['year']}")
     _par(doc, f"القسم: {meta['class_name']}    المستوى: {meta['level']}    {meta['degree']}")
 
-    for it in items:
-        _par(doc, f"مادة {it['subject']}", 16, True, pb=True)
-        res, st_df = it["res"], it["st_df"]
+    for n, it in enumerate(items):
+        _par(doc, f"مادة {it['subject']}", 16, True, pb=n > 0)
+        res, st_df, plan = it["res"], it["st_df"], it["plan"]
         _par(doc, "الجدول الإجمالي للنتائج", 13, True)
         _table(doc, ["الرقم"] + list(res.columns),
                [[i + 1] + [_fmt(v) for v in r] for i, r in enumerate(res.values.tolist())])
@@ -137,12 +120,18 @@ def build_docx(meta, items):
         _table(doc, [""] + list(st_df.columns),
                [[idx] + [_fmt(v) for v in r] for idx, r in zip(st_df.index, st_df.values.tolist())])
         _par(doc, "")
-        _par(doc, "التشخيص والمعالجة", 13, True)
-        _table(doc, ["المعيار", "نسبة التملك %", "التلاميذ المعنيون بالخطة العلاجية", "الأخطاء المرصودة",
-                     "تأويل الخطأ والأسباب", "الجهاز العلاجي"],
-               [[d["name"], d["pct"], (d["weak"] or "—"), d["errors"], d["causes"], d["remedies"]]
-                for d in it["diag"]])
-        _page(doc, it["subject"], it["page"], it.get("plan", []))
+        _par(doc, "الأخطاء المرصودة والخطة العلاجية", 13, True)
+        if plan["label"]:
+            _par(doc, plan["label"], 12, True)
+        if plan["parts"]:
+            _table(doc, ["الأداء المنتظر (المكوّن)", "الأخطاء المرصودة", "تأويل الخطأ والأسباب",
+                         "التلاميذ المعنيون بالخطة العلاجية", "الجهاز العلاجي"],
+                   [[p["text"], p["errors"], p["causes"], "، ".join(p["students"]) or "—", p["remedies"]]
+                    for p in plan["parts"]])
+        else:  # لم يُدخل نص الأداء المنتظر بعد: ملخص المعايير فقط
+            _table(doc, ["المعيار", "نسبة التملك %", "التلاميذ المعنيون (أقل من العتبة)"],
+                   [[r["name"], r["pct"], "، ".join(r["weak"]) or "—"] for r in it.get("crit_rows", [])])
+        _page(doc, it["subject"], it["page"], plan)
 
     buf = io.BytesIO()
     doc.save(buf)
