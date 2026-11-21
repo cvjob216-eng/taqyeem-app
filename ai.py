@@ -77,20 +77,26 @@ def _call_gemini(content):
                                             "responseMimeType": "application/json"}}).encode("utf-8")
     first = _secret("GEMINI_MODEL") or GEMINI_DEFAULT
     models = list(dict.fromkeys([first, *GEMINI_FALLBACKS]))
-    data = None
+    data, last = None, None
     for k, model in enumerate(models):
         req = urllib.request.Request(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", data=body,
             headers={"Content-Type": "application/json", "x-goog-api-key": _secret("GEMINI_API_KEY")})
         try:
-            with urllib.request.urlopen(req, timeout=90) as r:
+            with urllib.request.urlopen(req, timeout=150 if k == 0 else 90) as r:
                 data = json.loads(r.read())
             break
         except urllib.error.HTTPError as e:
             msg = e.read().decode("utf-8", "ignore")[:300]
-            if e.code == 404 and k < len(models) - 1:  # نموذج غير متاح: جرّب التالي
+            last = f"Gemini ({e.code}، النموذج {model}): {msg}"
+            if e.code in (404, 503) and k < len(models) - 1:  # غير متاح أو مزدحم: جرّب التالي
                 continue
-            raise RuntimeError(f"Gemini ({e.code}، النموذج {model}): {msg}") from e
+            raise RuntimeError(last) from e
+        except (TimeoutError, urllib.error.URLError) as e:  # انتهت المهلة أو انقطع الاتصال
+            last = f"انتهت مهلة الانتظار أو تعذّر الاتصال بـ Gemini (النموذج {model}): {e}"
+            if k < len(models) - 1:
+                continue
+            raise RuntimeError(last + " — أعد المحاولة بعد قليل، فالمستوى المجاني قد يكون مزدحماً.") from e
     cands = data.get("candidates") or []
     if not cands:
         raise RuntimeError(f"لم يُرجع Gemini أي رد: {str(data.get('promptFeedback', ''))[:200]}")
